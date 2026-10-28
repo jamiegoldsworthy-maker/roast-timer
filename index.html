@@ -8,16 +8,13 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <title>RoastTimer — Multi-Dish Dinner Coordinator</title>
 
-<!-- Inline Dynamic Web App Manifest for Installable PWA Support -->
-<!--  <link rel="manifest" href='data:application/manifest+json,{"name":"RoastTimer PWA","short_name":"RoastTimer","start_url":"/roast-timer/","scope":"/roast-timer/","display":"standalone","background_color":"#090d16","theme_color":"#f97316","icons":[{"src":"https://placehold.co/192x192/f97316/090d16?text=RT","sizes":"192x192","type":"image/png"}]}' />
-
-<!-- PWA Manifest Link -->
+  <!-- PWA Manifest Link -->
   <link rel="manifest" href="manifest.json" />
 
-<!-- Browser Favicon & Apple Touch Icon -->
+  <!-- Browser Favicon & Apple Touch Icon -->
   <link rel="icon" type="image/png" href="icon-512.png">
   <link rel="apple-touch-icon" href="icon-512.png">
-    
+
   <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
@@ -54,13 +51,13 @@
     import { getFirestore, doc, setDoc, getDoc, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
 
     const CUSTOM_FIREBASE_CONFIG = {
-            apiKey: "AIzaSyBwLKLh4lbjx-tkf-wlO30z2kRSW4qrE-8",
-            authDomain: "roast-timer-sync.firebaseapp.com",
-            projectId: "roast-timer-sync",
-            storageBucket: "roast-timer-sync.firebasestorage.app",
-            messagingSenderId: "1022082336219",
-            appId: "1:1022082336219:web:01a5ed8f54c1bdc0fc13fe" 
-        }; 
+      apiKey: "AIzaSyBwLKLh4lbjx-tkf-wlO30z2kRSW4qrE-8",
+      authDomain: "roast-timer-sync.firebaseapp.com",
+      projectId: "roast-timer-sync",
+      storageBucket: "roast-timer-sync.firebasestorage.app",
+      messagingSenderId: "1022082336219",
+      appId: "1:1022082336219:web:01a5ed8f54c1bdc0fc13fe"
+    };
 
     let firebaseConfig = CUSTOM_FIREBASE_CONFIG;
     if (!firebaseConfig && typeof __firebase_config !== 'undefined') {
@@ -285,8 +282,25 @@
     }
 
     // ============================================================================
-    // DEFAULT ROAST LIBRARY & PRESETS
+    // DEFAULT CATEGORIES, ROAST LIBRARY & PRESETS
     // ============================================================================
+    const DEFAULT_CATEGORIES = [
+      'Meat',
+      'Poultry',
+      'Potatoes',
+      'Veg',
+      'Sides & Yorkshires',
+      'Gravy & Sauces'
+    ];
+
+    const DEFAULT_SAMPLE_IDS = [
+      'comp-beef-topside',
+      'comp-roast-potatoes',
+      'comp-honey-parsnips',
+      'comp-yorkshires',
+      'comp-gravy'
+    ];
+
     const COLOR_PALETTE = [
       { id: 'orange', name: 'Orange', bg: 'bg-orange-500/15', text: 'text-orange-300', border: 'border-orange-500/40', dot: 'bg-orange-400', badge: 'bg-orange-500/20 text-orange-300 border-orange-500/30' },
       { id: 'amber', name: 'Amber', bg: 'bg-amber-500/15', text: 'text-amber-300', border: 'border-amber-500/40', dot: 'bg-amber-400', badge: 'bg-amber-500/20 text-amber-300 border-amber-500/30' },
@@ -300,6 +314,7 @@
       {
         id: 'comp-beef-topside',
         name: 'Beef Topside Joint (1.5kg)',
+        category: 'Meat',
         color: 'rose',
         soloOvenSlot: false,
         defaultOven: 'oven1',
@@ -359,6 +374,7 @@
       {
         id: 'comp-roast-potatoes',
         name: 'Crispy Goose Fat Roast Potatoes',
+        category: 'Potatoes',
         color: 'amber',
         soloOvenSlot: false,
         defaultOven: 'oven1',
@@ -407,6 +423,7 @@
       {
         id: 'comp-honey-parsnips',
         name: 'Honey & Mustard Roast Parsnips',
+        category: 'Veg',
         color: 'emerald',
         soloOvenSlot: false,
         defaultOven: 'oven1',
@@ -443,6 +460,7 @@
       {
         id: 'comp-yorkshires',
         name: 'Giant Yorkshire Puddings',
+        category: 'Sides & Yorkshires',
         color: 'orange',
         soloOvenSlot: true,
         defaultOven: 'oven1',
@@ -479,6 +497,7 @@
       {
         id: 'comp-gravy',
         name: 'Red Wine & Bone Marrow Gravy',
+        category: 'Gravy & Sauces',
         color: 'violet',
         soloOvenSlot: false,
         defaultOven: 'none',
@@ -635,6 +654,7 @@
             stepId: step.id,
             componentId: comp.id,
             componentName: comp.name,
+            componentCategory: comp.category || 'Uncategorized',
             componentColor: comp.color || 'orange',
             soloOvenSlot: Boolean(comp.soloOvenSlot),
             stepOrder: idx + 1,
@@ -693,6 +713,7 @@
             stepId: preheatStepId,
             componentId: `system-${ovenKey}`,
             componentName: `${ov.name || (ovenKey === 'oven1' ? 'Main Oven' : 'Second Oven')}`,
+            componentCategory: 'System',
             componentColor: ovenKey === 'oven1' ? 'orange' : 'sky',
             soloOvenSlot: false,
             stepOrder: 1,
@@ -799,12 +820,24 @@
       const firedAlertsRef = useRef({});
       const prevNowRef = useRef(Date.now());
 
+      // Allow empty arrays in localStorage so deleted default items NEVER resurrect!
+      const [categories, setCategories] = useState(() => {
+        try {
+          const saved = localStorage.getItem('roasttimer_categories');
+          if (saved !== null) {
+            const parsed = JSON.parse(saved);
+            if (Array.isArray(parsed)) return parsed;
+          }
+        } catch {}
+        return DEFAULT_CATEGORIES;
+      });
+
       const [library, setLibrary] = useState(() => {
         try {
           const saved = localStorage.getItem('roasttimer_library');
-          if (saved) {
+          if (saved !== null) {
             const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            if (Array.isArray(parsed)) return parsed;
           }
         } catch {}
         return DEFAULT_LIBRARY;
@@ -813,9 +846,9 @@
       const [presets, setPresets] = useState(() => {
         try {
           const saved = localStorage.getItem('roasttimer_presets');
-          if (saved) {
+          if (saved !== null) {
             const parsed = JSON.parse(saved);
-            if (Array.isArray(parsed) && parsed.length > 0) return parsed;
+            if (Array.isArray(parsed)) return parsed;
           }
         } catch {}
         return DEFAULT_PRESETS;
@@ -824,7 +857,7 @@
       const [session, setSession] = useState(() => {
         try {
           const saved = localStorage.getItem('roasttimer_session');
-          if (saved) {
+          if (saved !== null) {
             const parsed = JSON.parse(saved);
             return {
               ...parsed,
@@ -865,6 +898,10 @@
       const [showBurgerDrawer, setShowBurgerDrawer] = useState(false);
       const [toastMessage, setToastMessage] = useState(null);
 
+      // Burger Menu Active Dishes Multi-Select Dropdown states
+      const [burgerDishesDropdownOpen, setBurgerDishesDropdownOpen] = useState(false);
+      const [burgerDishSearch, setBurgerDishSearch] = useState('');
+
       const serveTimeInputRef = useRef(null);
       const fileImportInputRef = useRef(null);
 
@@ -889,25 +926,60 @@
       }, []);
 
       const isApplyingRemoteRef = useRef(false);
-      const lastLocalMutationMsRef = useRef(0);
+      const lastLocalMutationMsRef = useRef(() => {
+        try {
+          return Number(localStorage.getItem('roasttimer_updated_at')) || 0;
+        } catch { return 0; }
+      });
 
-      const stateRef = useRef({ session, library, presets, kitchenPin });
+      const stateRef = useRef({ session, library, presets, categories, kitchenPin });
       useEffect(() => {
-        stateRef.current = { session, library, presets, kitchenPin };
+        stateRef.current = { session, library, presets, categories, kitchenPin };
         try {
           localStorage.setItem('roasttimer_library', JSON.stringify(library));
           localStorage.setItem('roasttimer_presets', JSON.stringify(presets));
           localStorage.setItem('roasttimer_session', JSON.stringify(session));
+          localStorage.setItem('roasttimer_categories', JSON.stringify(categories));
           localStorage.setItem('roasttimer_pin', kitchenPin);
           setLastLocalSaveAt(new Date());
         } catch (err) {
           console.warn("LocalStorage write error:", err);
         }
-      }, [library, presets, session, kitchenPin]);
+      }, [library, presets, session, categories, kitchenPin]);
+
+      // Automatically prune any ghost/stale IDs in session.selectedComponentIds that don't exist in library
+      const validSelectedIds = useMemo(() => {
+        const libIds = new Set(library.map(c => c.id));
+        return (session.selectedComponentIds || []).filter(id => libIds.has(id));
+      }, [session.selectedComponentIds, library]);
 
       useEffect(() => {
         if (navigator.storage && navigator.storage.persist) {
           navigator.storage.persist().catch(() => {});
+        }
+      }, []);
+
+      const pushStateToCloud = useCallback(async (nextSession, nextLibrary, nextPresets, nextCategories) => {
+        const nowMs = Date.now();
+        lastLocalMutationMsRef.current = nowMs;
+        try { localStorage.setItem('roasttimer_updated_at', String(nowMs)); } catch {}
+        const fb = window.__ROAST_FIREBASE__;
+        if (!fb || !fb.db || !fb.auth?.currentUser || isApplyingRemoteRef.current) return;
+        const normalizedPin = (stateRef.current.kitchenPin || 'ROAST1').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
+        const kitchenDocRef = fb.doc(fb.db, 'artifacts', fb.appId, 'public', 'data', 'kitchens', normalizedPin);
+        try {
+          await fb.setDoc(kitchenDocRef, {
+            kitchenPin: normalizedPin,
+            sessionJson: JSON.stringify(nextSession ?? stateRef.current.session),
+            libraryJson: JSON.stringify(nextLibrary ?? stateRef.current.library),
+            presetsJson: JSON.stringify(nextPresets ?? stateRef.current.presets),
+            categoriesJson: JSON.stringify(nextCategories ?? stateRef.current.categories),
+            updatedAt: nowMs,
+            updatedBy: fb.auth.currentUser.uid
+          });
+          setLastSyncedAt(new Date());
+        } catch (e) {
+          console.warn("Cloud push error:", e);
         }
       }, []);
 
@@ -937,24 +1009,47 @@
               setLastSyncedAt(new Date());
               if (snapshot.exists()) {
                 const data = snapshot.data();
-                if (data.updatedBy === user.uid && data.updatedAt && (Date.now() - data.updatedAt < 2500)) {
+                const remoteUpdatedAt = Number(data.updatedAt) || 0;
+                const localUpdatedAt = Number(localStorage.getItem('roasttimer_updated_at')) || 0;
+
+                if (data.updatedBy === user.uid && remoteUpdatedAt && (Date.now() - remoteUpdatedAt < 2500)) {
                   return;
                 }
-                if (Date.now() - lastLocalMutationMsRef.current < 2000) {
+                if (Date.now() - Number(lastLocalMutationMsRef.current || 0) < 2500) {
                   return;
                 }
+
+                // If local storage has newer changes than the cloud (e.g. offline edits or old default cloud doc), push local to cloud!
+                if (localUpdatedAt > remoteUpdatedAt) {
+                  fb.setDoc(kitchenDocRef, {
+                    kitchenPin: normalizedPin,
+                    libraryJson: JSON.stringify(stateRef.current.library),
+                    presetsJson: JSON.stringify(stateRef.current.presets),
+                    sessionJson: JSON.stringify(stateRef.current.session),
+                    categoriesJson: JSON.stringify(stateRef.current.categories),
+                    updatedAt: localUpdatedAt,
+                    updatedBy: user.uid
+                  }).catch(() => {});
+                  return;
+                }
+
                 isApplyingRemoteRef.current = true;
                 if (data.libraryJson) try { setLibrary(JSON.parse(data.libraryJson)); } catch {}
                 if (data.presetsJson) try { setPresets(JSON.parse(data.presetsJson)); } catch {}
                 if (data.sessionJson) try { setSession(JSON.parse(data.sessionJson)); } catch {}
+                if (data.categoriesJson) try { setCategories(JSON.parse(data.categoriesJson)); } catch {}
+                try { localStorage.setItem('roasttimer_updated_at', String(remoteUpdatedAt)); } catch {}
                 setTimeout(() => { isApplyingRemoteRef.current = false; }, 150);
               } else {
+                const nowMs = Date.now();
+                try { localStorage.setItem('roasttimer_updated_at', String(nowMs)); } catch {}
                 fb.setDoc(kitchenDocRef, {
                   kitchenPin: normalizedPin,
                   libraryJson: JSON.stringify(stateRef.current.library),
                   presetsJson: JSON.stringify(stateRef.current.presets),
                   sessionJson: JSON.stringify(stateRef.current.session),
-                  updatedAt: Date.now(),
+                  categoriesJson: JSON.stringify(stateRef.current.categories),
+                  updatedAt: nowMs,
                   updatedBy: user.uid
                 }).catch(() => {});
               }
@@ -971,31 +1066,12 @@
         return () => { if (unsubscribeSnapshot) unsubscribeSnapshot(); };
       }, [kitchenPin]);
 
-      const pushStateToCloud = useCallback(async (nextSession, nextLibrary, nextPresets) => {
-        lastLocalMutationMsRef.current = Date.now();
-        const fb = window.__ROAST_FIREBASE__;
-        if (!fb || !fb.db || !fb.auth?.currentUser || isApplyingRemoteRef.current) return;
-        const normalizedPin = (stateRef.current.kitchenPin || 'ROAST1').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '');
-        const kitchenDocRef = fb.doc(fb.db, 'artifacts', fb.appId, 'public', 'data', 'kitchens', normalizedPin);
-        try {
-          await fb.setDoc(kitchenDocRef, {
-            kitchenPin: normalizedPin,
-            sessionJson: JSON.stringify(nextSession ?? stateRef.current.session),
-            libraryJson: JSON.stringify(nextLibrary ?? stateRef.current.library),
-            presetsJson: JSON.stringify(nextPresets ?? stateRef.current.presets),
-            updatedAt: Date.now(),
-            updatedBy: fb.auth.currentUser.uid
-          });
-          setLastSyncedAt(new Date());
-        } catch {}
-      }, []);
-
       const updateSession = useCallback((updater) => {
         setSession(prev => {
           const next = typeof updater === 'function' ? updater(prev) : updater;
           stateRef.current.session = next;
           try { localStorage.setItem('roasttimer_session', JSON.stringify(next)); } catch {}
-          pushStateToCloud(next, stateRef.current.library, stateRef.current.presets);
+          pushStateToCloud(next, stateRef.current.library, stateRef.current.presets, stateRef.current.categories);
           return next;
         });
       }, [pushStateToCloud]);
@@ -1005,7 +1081,7 @@
           const next = typeof updater === 'function' ? updater(prev) : updater;
           stateRef.current.library = next;
           try { localStorage.setItem('roasttimer_library', JSON.stringify(next)); } catch {}
-          pushStateToCloud(stateRef.current.session, next, stateRef.current.presets);
+          pushStateToCloud(stateRef.current.session, next, stateRef.current.presets, stateRef.current.categories);
           return next;
         });
       }, [pushStateToCloud]);
@@ -1015,15 +1091,55 @@
           const next = typeof updater === 'function' ? updater(prev) : updater;
           stateRef.current.presets = next;
           try { localStorage.setItem('roasttimer_presets', JSON.stringify(next)); } catch {}
-          pushStateToCloud(stateRef.current.session, stateRef.current.library, next);
+          pushStateToCloud(stateRef.current.session, stateRef.current.library, next, stateRef.current.categories);
           return next;
         });
       }, [pushStateToCloud]);
 
+      const updateCategories = useCallback((updater) => {
+        setCategories(prev => {
+          const next = typeof updater === 'function' ? updater(prev) : updater;
+          stateRef.current.categories = next;
+          try { localStorage.setItem('roasttimer_categories', JSON.stringify(next)); } catch {}
+          pushStateToCloud(stateRef.current.session, stateRef.current.library, stateRef.current.presets, next);
+          return next;
+        });
+      }, [pushStateToCloud]);
+
+      // Permanently wipe built-in sample dishes & sample presets while preserving custom ones
+      const handleRemoveBuiltInDefaults = () => {
+        const nextLibrary = stateRef.current.library.filter(c => !DEFAULT_SAMPLE_IDS.includes(c.id));
+        const nextPresets = stateRef.current.presets.filter(p => p.id !== 'preset-sunday-beef' && p.id !== 'preset-christmas-feast');
+        const nextSelectedIds = (stateRef.current.session.selectedComponentIds || []).filter(id => !DEFAULT_SAMPLE_IDS.includes(id));
+        const nextSession = {
+          ...stateRef.current.session,
+          mealName: stateRef.current.session.mealName === 'Classic Sunday Beef Roast' ? 'My Roast Dinner' : stateRef.current.session.mealName,
+          selectedComponentIds: nextSelectedIds
+        };
+
+        stateRef.current.library = nextLibrary;
+        stateRef.current.presets = nextPresets;
+        stateRef.current.session = nextSession;
+
+        setLibrary(nextLibrary);
+        setPresets(nextPresets);
+        setSession(nextSession);
+
+        try {
+          localStorage.setItem('roasttimer_library', JSON.stringify(nextLibrary));
+          localStorage.setItem('roasttimer_presets', JSON.stringify(nextPresets));
+          localStorage.setItem('roasttimer_session', JSON.stringify(nextSession));
+        } catch {}
+
+        pushStateToCloud(nextSession, nextLibrary, nextPresets, stateRef.current.categories);
+        showToast('Permanently removed all default sample dishes & presets!');
+      };
+
       const handleExportBackup = () => {
         const payload = {
-          version: 2,
+          version: 3,
           exportedAt: new Date().toISOString(),
+          categories: stateRef.current.categories,
           library: stateRef.current.library,
           presets: stateRef.current.presets,
           session: stateRef.current.session
@@ -1035,7 +1151,7 @@
         a.download = `roasttimer-backup-${new Date().toISOString().slice(0, 10)}.json`;
         a.click();
         URL.revokeObjectURL(url);
-        showToast('Downloaded JSON backup of all dishes & meals');
+        showToast('Downloaded JSON backup of all dishes, categories & meals');
       };
 
       const handleImportBackup = (e) => {
@@ -1045,10 +1161,23 @@
         reader.onload = (ev) => {
           try {
             const parsed = JSON.parse(ev.target.result);
-            if (Array.isArray(parsed.library)) updateLibrary(parsed.library);
-            if (Array.isArray(parsed.presets)) updatePresets(parsed.presets);
-            if (parsed.session) updateSession(parsed.session);
-            showToast('Restored dishes, presets & session from backup!');
+            const nextCats = Array.isArray(parsed.categories) ? parsed.categories : stateRef.current.categories;
+            const nextLib = Array.isArray(parsed.library) ? parsed.library : stateRef.current.library;
+            const nextPre = Array.isArray(parsed.presets) ? parsed.presets : stateRef.current.presets;
+            const nextSes = parsed.session ? parsed.session : stateRef.current.session;
+
+            stateRef.current.categories = nextCats;
+            stateRef.current.library = nextLib;
+            stateRef.current.presets = nextPre;
+            stateRef.current.session = nextSes;
+
+            setCategories(nextCats);
+            setLibrary(nextLib);
+            setPresets(nextPre);
+            setSession(nextSes);
+
+            pushStateToCloud(nextSes, nextLib, nextPre, nextCats);
+            showToast('Restored dishes, categories, presets & session from backup!');
           } catch {
             showToast('Invalid backup file format');
           }
@@ -1302,6 +1431,26 @@
         return schedule.allSteps.find(s => s.stepId === isolatedStepId) || null;
       }, [isolatedStepId, schedule.allSteps]);
 
+      const hasAnySampleDishes = useMemo(() => {
+        return library.some(c => DEFAULT_SAMPLE_IDS.includes(c.id));
+      }, [library]);
+
+      // Group library items by category for the Burger Menu Multi-Select Dropdown
+      const groupedBurgerDishes = useMemo(() => {
+        const q = burgerDishSearch.trim().toLowerCase();
+        const filtered = library.filter(comp => {
+          if (!q) return true;
+          return (comp.name || '').toLowerCase().includes(q) || (comp.category || '').toLowerCase().includes(q);
+        });
+        const map = {};
+        filtered.forEach(comp => {
+          const cat = comp.category || 'Uncategorized';
+          if (!map[cat]) map[cat] = [];
+          map[cat].push(comp);
+        });
+        return Object.entries(map);
+      }, [library, burgerDishSearch]);
+
       return (
         <div className="min-h-screen flex flex-col bg-[#090d16] text-slate-100 pb-20 md:pb-10">
           <header className="sticky top-0 z-30 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/60">
@@ -1409,14 +1558,19 @@
             {activeTab === 'library' && (
               <ItemsLibraryView
                 library={library}
+                categories={categories}
+                updateCategories={updateCategories}
                 session={session}
                 updateSession={updateSession}
                 updateLibrary={updateLibrary}
                 ovenConfig={schedule.ovenConfig}
+                hasAnySampleDishes={hasAnySampleDishes}
+                onRemoveBuiltInDefaults={handleRemoveBuiltInDefaults}
                 onEditComponent={(comp) => setEditingComponent(comp)}
-                onCreateComponent={() => setEditingComponent({
+                onCreateComponent={(defaultCat) => setEditingComponent({
                   id: 'comp-' + Date.now(),
                   name: '',
+                  category: defaultCat && defaultCat !== 'ALL' ? defaultCat : (categories[0] || 'Meat'),
                   color: 'orange',
                   soloOvenSlot: false,
                   defaultOven: 'oven1',
@@ -1436,6 +1590,7 @@
                 session={session}
                 updateSession={updateSession}
                 library={library}
+                categories={categories}
                 presets={presets}
                 updatePresets={updatePresets}
                 schedule={schedule}
@@ -1664,10 +1819,11 @@
                   </div>
                 </div>
 
-                <div className="space-y-2">
+                {/* ACTIVE DISHES MULTI-SELECT DROPDOWN TICKBOX */}
+                <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800/90 space-y-2.5">
                   <div className="flex items-center justify-between">
                     <span className="text-[11px] font-mono uppercase text-slate-400">
-                      Active Dishes ({session.selectedComponentIds?.length || 0})
+                      Active Dishes ({validSelectedIds.length} of {library.length})
                     </span>
                     <button
                       onClick={() => {
@@ -1675,6 +1831,7 @@
                         setEditingComponent({
                           id: 'comp-' + Date.now(),
                           name: '',
+                          category: categories[0] || 'Meat',
                           color: 'orange',
                           soloOvenSlot: false,
                           defaultOven: 'oven1',
@@ -1684,45 +1841,154 @@
                           isNew: true
                         });
                       }}
-                      className="text-xs text-orange-400 hover:underline font-medium"
+                      className="text-xs text-orange-400 hover:underline font-semibold"
                     >
                       + New Dish
                     </button>
                   </div>
-                  <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
-                    {library.map(comp => {
-                      const selected = (session.selectedComponentIds || []).includes(comp.id);
-                      return (
-                        <div
-                          key={comp.id}
-                          className={`p-2 rounded-xl border text-xs flex items-center justify-between gap-2 transition ${
-                            selected ? 'bg-orange-500/10 border-orange-500/30 text-slate-100' : 'bg-slate-950 border-slate-800/80 text-slate-400'
-                          }`}
-                        >
-                          <button
-                            onClick={() => {
-                              const next = selected
-                                ? (session.selectedComponentIds || []).filter(id => id !== comp.id)
-                                : [...(session.selectedComponentIds || []), comp.id];
-                              updateSession(prev => ({ ...prev, selectedComponentIds: next }));
-                            }}
-                            className="flex-1 text-left truncate flex items-center gap-2"
+
+                  {/* Multi-select dropdown trigger button */}
+                  <button
+                    type="button"
+                    onClick={() => setBurgerDishesDropdownOpen(!burgerDishesDropdownOpen)}
+                    className="w-full px-3 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800/90 border border-slate-800 flex items-center justify-between gap-2 text-xs transition"
+                  >
+                    <div className="flex items-center gap-2 truncate">
+                      <Icon name="check-square" className="w-4 h-4 text-orange-400" />
+                      <span className="font-semibold text-slate-200 truncate">
+                        {validSelectedIds.length === 0
+                          ? 'Select dishes for roast...'
+                          : `${validSelectedIds.length} ${validSelectedIds.length === 1 ? 'dish' : 'dishes'} ticked`}
+                      </span>
+                    </div>
+                    <Icon name={burgerDishesDropdownOpen ? "chevron-up" : "chevron-down"} className="w-4 h-4 text-slate-400" />
+                  </button>
+
+                  {/* Selected active dish pills when closed */}
+                  {!burgerDishesDropdownOpen && validSelectedIds.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 pt-0.5">
+                      {validSelectedIds.map(id => {
+                        const comp = library.find(c => c.id === id);
+                        if (!comp) return null;
+                        return (
+                          <span
+                            key={comp.id}
+                            className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-lg bg-orange-500/15 border border-orange-500/30 text-[11px] text-orange-200"
                           >
-                            <span className={`w-4 h-4 rounded flex items-center justify-center border shrink-0 ${selected ? 'bg-orange-500 border-orange-500 text-slate-950' : 'border-slate-700'}`}>
-                              {selected && <Icon name="check" className="w-3 h-3 stroke-[3]" />}
-                            </span>
-                            <span className="truncate">{comp.name}</span>
-                          </button>
-                          <button
-                            onClick={() => { setShowBurgerDrawer(false); setEditingComponent(comp); }}
-                            className="px-2 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-orange-300 text-[11px]"
-                          >
-                            Edit
-                          </button>
+                            <span className="truncate max-w-[140px]">{comp.name}</span>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const next = validSelectedIds.filter(cid => cid !== comp.id);
+                                updateSession(prev => ({ ...prev, selectedComponentIds: next }));
+                              }}
+                              className="text-orange-400 hover:text-white"
+                              title="Remove from active roast"
+                            >
+                              ×
+                            </button>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  {/* Expanded Multi-Select Tickbox Dropdown Panel */}
+                  {burgerDishesDropdownOpen && (
+                    <div className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 space-y-2.5">
+                      <div className="flex items-center gap-1.5">
+                        <div className="relative flex-1">
+                          <input
+                            type="text"
+                            value={burgerDishSearch}
+                            onChange={e => setBurgerDishSearch(e.target.value)}
+                            placeholder="Filter dishes or categories..."
+                            className="w-full pl-7 pr-2 py-1.5 rounded-lg bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500 focus:border-orange-500 focus:outline-none"
+                          />
+                          <span className="absolute left-2 top-2 text-slate-500">
+                            <Icon name="search" className="w-3.5 h-3.5" />
+                          </span>
                         </div>
-                      );
-                    })}
-                  </div>
+                        <button
+                          type="button"
+                          onClick={() => updateSession(prev => ({ ...prev, selectedComponentIds: library.map(c => c.id) }))}
+                          className="px-2 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-[10px] font-mono text-orange-300"
+                          title="Select All"
+                        >
+                          All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => updateSession(prev => ({ ...prev, selectedComponentIds: [] }))}
+                          className="px-2 py-1.5 rounded-lg bg-slate-950 hover:bg-slate-800 border border-slate-800 text-[10px] font-mono text-slate-400"
+                          title="Clear Selection"
+                        >
+                          None
+                        </button>
+                      </div>
+
+                      <div className="max-h-60 overflow-y-auto space-y-3 pr-1">
+                        {groupedBurgerDishes.length === 0 ? (
+                          <div className="text-center py-4 text-xs text-slate-500">
+                            No dishes match your filter.
+                          </div>
+                        ) : (
+                          groupedBurgerDishes.map(([catName, comps]) => (
+                            <div key={catName} className="space-y-1">
+                              <div className="text-[10px] font-mono uppercase tracking-wider text-orange-400/90 px-1 font-bold">
+                                {catName} ({comps.length})
+                              </div>
+                              {comps.map(comp => {
+                                const selected = validSelectedIds.includes(comp.id);
+                                return (
+                                  <div
+                                    key={comp.id}
+                                    className={`p-2 rounded-lg border text-xs flex items-center justify-between gap-2 transition ${
+                                      selected ? 'bg-orange-500/15 border-orange-500/40 text-white' : 'bg-slate-950/80 border-slate-800/80 text-slate-400 hover:text-slate-200'
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        const next = selected
+                                          ? validSelectedIds.filter(id => id !== comp.id)
+                                          : [...validSelectedIds, comp.id];
+                                        updateSession(prev => ({ ...prev, selectedComponentIds: next }));
+                                      }}
+                                      className="flex-1 text-left truncate flex items-center gap-2"
+                                    >
+                                      <span className={`w-4 h-4 rounded flex items-center justify-center border shrink-0 ${selected ? 'bg-orange-500 border-orange-500 text-slate-950' : 'border-slate-700'}`}>
+                                        {selected && <Icon name="check" className="w-3 h-3 stroke-[3]" />}
+                                      </span>
+                                      <span className="truncate font-medium">{comp.name}</span>
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => { setShowBurgerDrawer(false); setEditingComponent(comp); }}
+                                      className="px-1.5 py-0.5 rounded bg-slate-900 hover:bg-slate-800 text-slate-400 hover:text-orange-300 text-[10px] shrink-0"
+                                    >
+                                      Edit
+                                    </button>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {hasAnySampleDishes && (
+                    <button
+                      type="button"
+                      onClick={handleRemoveBuiltInDefaults}
+                      className="w-full py-1.5 px-2.5 rounded-lg bg-rose-950/40 hover:bg-rose-900/50 border border-rose-500/30 text-rose-300 text-[11px] font-medium flex items-center justify-center gap-1.5 transition"
+                    >
+                      <Icon name="trash-2" className="w-3.5 h-3.5" />
+                      <span>Remove Built-In Sample Dishes</span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="p-3.5 rounded-xl bg-slate-950 border border-slate-800/80 space-y-3">
@@ -1947,12 +2213,27 @@
           {editingComponent && (
             <ComponentEditorModal
               component={editingComponent}
+              categories={categories}
+              onAddCategory={(newCat) => {
+                const clean = newCat.trim();
+                if (!clean) return;
+                if (!stateRef.current.categories.includes(clean)) {
+                  const nextCats = [...stateRef.current.categories, clean];
+                  stateRef.current.categories = nextCats;
+                  setCategories(nextCats);
+                  try { localStorage.setItem('roasttimer_categories', JSON.stringify(nextCats)); } catch {}
+                }
+              }}
               onClose={() => setEditingComponent(null)}
               onSave={(saved) => {
                 const isNewComp = Boolean(editingComponent.isNew);
                 const nextLibrary = stateRef.current.library.some(c => c.id === saved.id)
                   ? stateRef.current.library.map(c => c.id === saved.id ? saved : c)
                   : [...stateRef.current.library, saved];
+
+                const nextCategories = saved.category && !stateRef.current.categories.includes(saved.category)
+                  ? [...stateRef.current.categories, saved.category]
+                  : stateRef.current.categories;
 
                 const nextSession = isNewComp
                   ? {
@@ -1962,13 +2243,23 @@
                   : stateRef.current.session;
 
                 stateRef.current.library = nextLibrary;
+                stateRef.current.categories = nextCategories;
                 stateRef.current.session = nextSession;
+
                 setLibrary(nextLibrary);
+                setCategories(nextCategories);
                 if (isNewComp) setSession(nextSession);
-                pushStateToCloud(nextSession, nextLibrary, stateRef.current.presets);
+
+                try {
+                  localStorage.setItem('roasttimer_library', JSON.stringify(nextLibrary));
+                  localStorage.setItem('roasttimer_categories', JSON.stringify(nextCategories));
+                  localStorage.setItem('roasttimer_session', JSON.stringify(nextSession));
+                } catch {}
+
+                pushStateToCloud(nextSession, nextLibrary, stateRef.current.presets, nextCategories);
 
                 setEditingComponent(null);
-                showToast(`Saved "${saved.name}"`);
+                showToast(`Saved "${saved.name}" (${saved.category || 'Uncategorized'})`);
               }}
             />
           )}
@@ -2996,32 +3287,51 @@
     }
 
     // ============================================================================
-    // SCREEN 2: ITEMS LIBRARY VIEW
+    // SCREEN 2: ITEMS LIBRARY VIEW (WITH CUSTOMIZABLE CATEGORIES & SAMPLE CLEANUP)
     // ============================================================================
     function ItemsLibraryView({
       library,
+      categories,
+      updateCategories,
       session,
       updateSession,
       updateLibrary,
       ovenConfig,
+      hasAnySampleDishes,
+      onRemoveBuiltInDefaults,
       onEditComponent,
       onCreateComponent,
       showToast
     }) {
       const [searchQuery, setSearchQuery] = useState('');
+      const [selectedCategory, setSelectedCategory] = useState('ALL');
       const [filterSoloOnly, setFilterSoloOnly] = useState(false);
+      const [showCategoryManager, setShowCategoryManager] = useState(false);
+      const [newCategoryInput, setNewCategoryInput] = useState('');
+
+      // Merge explicit categories with any categories found on dishes
+      const allCategories = useMemo(() => {
+        const set = new Set(categories || []);
+        library.forEach(item => {
+          if (item.category) set.add(item.category);
+        });
+        return Array.from(set);
+      }, [categories, library]);
 
       const filteredLibrary = useMemo(() => {
         return library.filter(item => {
+          const itemCat = item.category || 'Uncategorized';
+          if (selectedCategory !== 'ALL' && itemCat !== selectedCategory) return false;
           if (filterSoloOnly && !item.soloOvenSlot) return false;
           if (!searchQuery.trim()) return true;
           const q = searchQuery.toLowerCase();
           const nameMatch = (item.name || '').toLowerCase().includes(q);
+          const catMatch = itemCat.toLowerCase().includes(q);
           const ingMatch = (item.ingredients || []).some(i => i.toLowerCase().includes(q));
           const stepMatch = (item.steps || []).some(s => (s.title || '').toLowerCase().includes(q));
-          return nameMatch || ingMatch || stepMatch;
+          return nameMatch || catMatch || ingMatch || stepMatch;
         });
-      }, [library, searchQuery, filterSoloOnly]);
+      }, [library, selectedCategory, searchQuery, filterSoloOnly]);
 
       const handleDeleteComponent = (comp) => {
         updateLibrary(prev => prev.filter(c => c.id !== comp.id));
@@ -3042,31 +3352,114 @@
         showToast(`Duplicated "${comp.name}"`);
       };
 
+      const handleAddCategory = (e) => {
+        e.preventDefault();
+        const trimmed = newCategoryInput.trim();
+        if (!trimmed) return;
+        if (allCategories.includes(trimmed)) {
+          showToast('Category already exists');
+          return;
+        }
+        updateCategories(prev => [...prev, trimmed]);
+        setNewCategoryInput('');
+        showToast(`Added category "${trimmed}"`);
+      };
+
+      const handleDeleteCategory = (catToDelete) => {
+        updateCategories(prev => prev.filter(c => c !== catToDelete));
+        if (selectedCategory === catToDelete) setSelectedCategory('ALL');
+        showToast(`Removed category "${catToDelete}"`);
+      };
+
       return (
         <div className="space-y-5">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <span className="text-xs font-mono uppercase text-orange-400">Screen 2 • Reusable Components</span>
-                <h2 className="text-2xl font-extrabold text-white mt-0.5">Items Library ({library.length})</h2>
-                <p className="text-xs text-slate-400 mt-0.5">Create, customize, and expand dishes with ordered steps and concurrent sub-steps.</p>
-              </div>
+          {/* Sticky Top Action Bar */}
+          <div className="sticky top-[61px] z-20 bg-[#090d16]/95 backdrop-blur-md py-2.5 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <span className="text-[11px] font-mono uppercase text-orange-400">Screen 2 • Reusable Components</span>
+              <h2 className="text-xl font-extrabold text-white">Items Library ({library.length})</h2>
+            </div>
+            <div className="flex items-center gap-2">
               <button
-                onClick={onCreateComponent}
-                className="px-4 py-2.5 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-extrabold text-xs flex items-center gap-2 shadow-lg shadow-orange-500/20"
+                onClick={() => setShowCategoryManager(!showCategoryManager)}
+                className={`px-3 py-2 rounded-xl text-xs font-bold border flex items-center gap-1.5 transition ${
+                  showCategoryManager
+                    ? 'bg-orange-500/20 border-orange-500/40 text-orange-300'
+                    : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300'
+                }`}
+              >
+                <Icon name="tag" className="w-3.5 h-3.5 text-orange-400" />
+                <span>Categories ({allCategories.length})</span>
+              </button>
+              <button
+                onClick={() => onCreateComponent(selectedCategory)}
+                className="px-4 py-2 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-extrabold text-xs flex items-center gap-1.5 shadow-lg shadow-orange-500/20"
               >
                 <Icon name="plus" className="w-4 h-4" />
                 <span>New Dish Component</span>
               </button>
             </div>
+          </div>
 
-            <div className="flex flex-col sm:flex-row gap-3 pt-2 border-t border-slate-800">
+          {/* Customizable Categories Manager Drawer */}
+          {showCategoryManager && (
+            <div className="bg-slate-900 border border-orange-500/30 rounded-2xl p-4 space-y-3 shadow-xl">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h3 className="text-xs font-bold text-white uppercase font-mono">Manage Custom Categories</h3>
+                  <p className="text-[11px] text-slate-400">Add or remove categories (e.g. Meat, Veg, Potatoes, Sides). Saved automatically in backups & cloud sync.</p>
+                </div>
+                <button onClick={() => setShowCategoryManager(false)} className="text-slate-400 hover:text-white">
+                  <Icon name="x" className="w-4 h-4" />
+                </button>
+              </div>
+
+              <form onSubmit={handleAddCategory} className="flex gap-2">
+                <input
+                  type="text"
+                  value={newCategoryInput}
+                  onChange={e => setNewCategoryInput(e.target.value)}
+                  placeholder="New category name (e.g. Starters, Stuffing, Desserts)..."
+                  className="flex-1 px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:border-orange-500 focus:outline-none"
+                />
+                <button
+                  type="submit"
+                  className="px-3.5 py-1.5 rounded-xl bg-orange-500 hover:bg-orange-400 text-slate-950 font-bold text-xs"
+                >
+                  + Add Category
+                </button>
+              </form>
+
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {allCategories.map(cat => (
+                  <span
+                    key={cat}
+                    className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-950 border border-slate-800 text-xs text-slate-200"
+                  >
+                    <span>{cat}</span>
+                    <button
+                      type="button"
+                      onClick={() => handleDeleteCategory(cat)}
+                      className="text-slate-500 hover:text-rose-400 font-bold"
+                      title={`Remove "${cat}" category`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Search, Category Filter Pills & Remove Defaults Banner */}
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4 space-y-3 shadow-xl">
+            <div className="flex flex-col sm:flex-row gap-2.5">
               <div className="relative flex-1">
                 <input
                   type="text"
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
-                  placeholder="Search dishes, ingredients, or steps..."
+                  placeholder="Search dishes, categories, ingredients, or steps..."
                   className="w-full pl-9 pr-4 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white placeholder-slate-500"
                 />
                 <span className="absolute left-3 top-2.5 text-slate-500">
@@ -3075,7 +3468,7 @@
               </div>
               <button
                 onClick={() => setFilterSoloOnly(!filterSoloOnly)}
-                className={`px-3.5 py-2 rounded-xl text-xs font-semibold border flex items-center gap-2 ${
+                className={`px-3.5 py-2 rounded-xl text-xs font-semibold border flex items-center gap-2 shrink-0 ${
                   filterSoloOnly ? 'bg-orange-500/20 border-orange-500/40 text-orange-300' : 'bg-slate-950 border-slate-800 text-slate-400'
                 }`}
               >
@@ -3083,140 +3476,200 @@
                 <span>Solo Oven Slot Only</span>
               </button>
             </div>
+
+            {/* Category Filter Pills */}
+            <div className="flex items-center gap-1.5 overflow-x-auto pb-1">
+              <button
+                onClick={() => setSelectedCategory('ALL')}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold shrink-0 border transition ${
+                  selectedCategory === 'ALL'
+                    ? 'bg-orange-500 text-slate-950 border-orange-500'
+                    : 'bg-slate-950 border-slate-800 text-slate-400 hover:text-white'
+                }`}
+              >
+                All ({library.length})
+              </button>
+              {allCategories.map(cat => {
+                const count = library.filter(i => (i.category || 'Uncategorized') === cat).length;
+                return (
+                  <button
+                    key={cat}
+                    onClick={() => setSelectedCategory(cat)}
+                    className={`px-3 py-1.5 rounded-xl text-xs font-semibold shrink-0 border transition ${
+                      selectedCategory === cat
+                        ? 'bg-orange-500 text-slate-950 border-orange-500 font-bold'
+                        : 'bg-slate-950 border-slate-800 text-slate-300 hover:border-slate-700'
+                    }`}
+                  >
+                    {cat} ({count})
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* One-Click Permanent Removal of Default Sample Dishes */}
+            {hasAnySampleDishes && (
+              <div className="pt-2 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-[11px] text-slate-400">
+                  Ready to use only your own custom dishes? Remove the 5 built-in sample dishes permanently.
+                </span>
+                <button
+                  onClick={onRemoveBuiltInDefaults}
+                  className="px-3 py-1 rounded-lg bg-rose-950/50 hover:bg-rose-900/60 border border-rose-500/30 text-rose-300 text-xs font-semibold flex items-center gap-1.5 transition"
+                >
+                  <Icon name="trash-2" className="w-3.5 h-3.5" />
+                  <span>Clear Sample Dishes</span>
+                </button>
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-1 gap-4">
-            {filteredLibrary.map(comp => {
-              const pal = COLOR_PALETTE.find(c => c.id === comp.color) || COLOR_PALETTE[0];
-              const isSelected = (session.selectedComponentIds || []).includes(comp.id);
-              const totalMins = (comp.steps || []).reduce((acc, s) => acc + (Number(s.durationMinutes) || 0), 0);
+            {filteredLibrary.length === 0 ? (
+              <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-10 text-center space-y-3">
+                <Icon name="utensils" className="w-8 h-8 text-orange-400 mx-auto" />
+                <div className="space-y-1">
+                  <h3 className="text-sm font-bold text-white">No dishes found in this view</h3>
+                  <p className="text-xs text-slate-400">Click "+ New Dish Component" above to add your own custom roast items.</p>
+                </div>
+              </div>
+            ) : (
+              filteredLibrary.map(comp => {
+                const pal = COLOR_PALETTE.find(c => c.id === comp.color) || COLOR_PALETTE[0];
+                const isSelected = (session.selectedComponentIds || []).includes(comp.id);
+                const totalMins = (comp.steps || []).reduce((acc, s) => acc + (Number(s.durationMinutes) || 0), 0);
 
-              return (
-                <div key={comp.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-lg">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="space-y-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className={`px-2.5 py-0.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 ${pal.badge}`}>
-                          <span className={`w-2 h-2 rounded-full ${pal.dot}`} />
-                          <span>{comp.name}</span>
-                        </span>
-                        <span className="font-mono text-xs text-slate-400 bg-slate-950 px-2.5 py-0.5 rounded-lg border border-slate-800">
-                          {formatDurationHM(totalMins)} total • {(comp.steps || []).length} steps
-                        </span>
-                        {comp.soloOvenSlot && (
-                          <span className="px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold bg-orange-500/20 text-orange-300 border border-orange-500/40">
-                            SOLO OVEN SLOT
+                return (
+                  <div key={comp.id} className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-lg">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="space-y-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className={`px-2.5 py-0.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 ${pal.badge}`}>
+                            <span className={`w-2 h-2 rounded-full ${pal.dot}`} />
+                            <span>{comp.name}</span>
                           </span>
+                          <span className="px-2 py-0.5 rounded-lg text-[11px] font-mono bg-slate-950 text-orange-300 border border-slate-800">
+                            {comp.category || 'Uncategorized'}
+                          </span>
+                          <span className="font-mono text-xs text-slate-400 bg-slate-950 px-2.5 py-0.5 rounded-lg border border-slate-800">
+                            {formatDurationHM(totalMins)} total • {(comp.steps || []).length} steps
+                          </span>
+                          {comp.soloOvenSlot && (
+                            <span className="px-2.5 py-0.5 rounded-lg text-xs font-mono font-bold bg-orange-500/20 text-orange-300 border border-orange-500/40">
+                              SOLO OVEN SLOT
+                            </span>
+                          )}
+                        </div>
+                        {comp.notes && (
+                          <p className="text-xs text-slate-300 leading-relaxed pt-1">{comp.notes}</p>
                         )}
                       </div>
-                      {comp.notes && (
-                        <p className="text-xs text-slate-300 leading-relaxed pt-1">{comp.notes}</p>
-                      )}
+
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          onClick={() => {
+                            const next = isSelected
+                              ? (session.selectedComponentIds || []).filter(id => id !== comp.id)
+                              : [...(session.selectedComponentIds || []), comp.id];
+                            updateSession(prev => ({ ...prev, selectedComponentIds: next }));
+                          }}
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
+                            isSelected
+                              ? 'bg-orange-500 text-slate-950 border-orange-500'
+                              : 'bg-slate-950 border-slate-700 text-slate-200 hover:border-orange-400'
+                          }`}
+                        >
+                          {isSelected ? '✓ In Active Roast' : '+ Add to Active Roast'}
+                        </button>
+                        <button
+                          onClick={() => onEditComponent(comp)}
+                          className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-orange-300 flex items-center gap-1.5"
+                        >
+                          <Icon name="edit-3" className="w-3.5 h-3.5" />
+                          <span>Edit Steps & Details</span>
+                        </button>
+                        <button
+                          onClick={() => handleDuplicateComponent(comp)}
+                          className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
+                          title="Duplicate Dish"
+                        >
+                          <Icon name="copy" className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteComponent(comp)}
+                          className="p-1.5 rounded-xl bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-400"
+                          title="Delete Dish"
+                        >
+                          <Icon name="trash-2" className="w-4 h-4" />
+                        </button>
+                      </div>
                     </div>
 
-                    <div className="flex flex-wrap items-center gap-2">
-                      <button
-                        onClick={() => {
-                          const next = isSelected
-                            ? session.selectedComponentIds.filter(id => id !== comp.id)
-                            : [...(session.selectedComponentIds || []), comp.id];
-                          updateSession(prev => ({ ...prev, selectedComponentIds: next }));
-                        }}
-                        className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition ${
-                          isSelected
-                            ? 'bg-orange-500 text-slate-950 border-orange-500'
-                            : 'bg-slate-950 border-slate-700 text-slate-200 hover:border-orange-400'
-                        }`}
-                      >
-                        {isSelected ? '✓ In Active Roast' : '+ Add to Active Roast'}
-                      </button>
-                      <button
-                        onClick={() => onEditComponent(comp)}
-                        className="px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs font-bold text-orange-300 flex items-center gap-1.5"
-                      >
-                        <Icon name="edit-3" className="w-3.5 h-3.5" />
-                        <span>Edit Steps & Details</span>
-                      </button>
-                      <button
-                        onClick={() => handleDuplicateComponent(comp)}
-                        className="p-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-300"
-                        title="Duplicate Dish"
-                      >
-                        <Icon name="copy" className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDeleteComponent(comp)}
-                        className="p-1.5 rounded-xl bg-slate-800 hover:bg-rose-950 text-slate-400 hover:text-rose-400"
-                        title="Delete Dish"
-                      >
-                        <Icon name="trash-2" className="w-4 h-4" />
-                      </button>
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-800/80">
+                      <div>
+                        <h4 className="text-[11px] font-mono uppercase text-slate-400 mb-2">Ingredients ({(comp.ingredients || []).length})</h4>
+                        <ul className="space-y-1">
+                          {(comp.ingredients || []).map((ing, i) => (
+                            <li key={i} className="text-xs text-slate-300 flex items-center gap-2">
+                              <span className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0" />
+                              <span>{ing}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div>
+                        <h4 className="text-[11px] font-mono uppercase text-slate-400 mb-2">Cooking Steps ({(comp.steps || []).length})</h4>
+                        <ol className="space-y-2">
+                          {[...(comp.steps || [])].sort((a, b) => (a.order || 0) - (b.order || 0)).map((st, sIdx) => (
+                            <li key={st.id || sIdx} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-1">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="font-bold text-slate-200">{sIdx + 1}. {st.title}</span>
+                                <div className="flex items-center gap-1.5 shrink-0">
+                                  {st.ovenAssignment && st.ovenAssignment !== 'none' && (
+                                    <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-300">
+                                      {st.ovenAssignment === 'oven2' ? (ovenConfig?.oven2?.name || 'Oven 2') : (ovenConfig?.oven1?.name || 'Oven 1')}
+                                      {st.ovenTempC ? ` ${st.ovenTempC}°C` : ''}
+                                    </span>
+                                  )}
+                                  <span className="font-mono text-orange-400">{formatDurationHM(st.durationMinutes)}</span>
+                                </div>
+                              </div>
+                              {st.subSteps && st.subSteps.length > 0 && (
+                                <div className="pl-2.5 border-l border-orange-500/40 space-y-0.5 pt-1">
+                                  {st.subSteps.map((sub, subIdx) => (
+                                    <div key={sub.id || subIdx} className="text-[11px] text-slate-400 flex items-center justify-between">
+                                      <span>{sIdx + 1}{String.fromCharCode(97 + subIdx)}: {sub.title}</span>
+                                      <span className="font-mono text-orange-300">{formatDurationHM(sub.durationMinutes)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                              {st.endInstruction && (
+                                <div className="text-[11px] text-orange-300/90 pt-0.5">→ {st.endInstruction}</div>
+                              )}
+                            </li>
+                          ))}
+                        </ol>
+                      </div>
                     </div>
                   </div>
-
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-3 border-t border-slate-800/80">
-                    <div>
-                      <h4 className="text-[11px] font-mono uppercase text-slate-400 mb-2">Ingredients ({(comp.ingredients || []).length})</h4>
-                      <ul className="space-y-1">
-                        {(comp.ingredients || []).map((ing, i) => (
-                          <li key={i} className="text-xs text-slate-300 flex items-center gap-2">
-                            <span className="w-1.5 h-1.5 rounded-full bg-orange-400 shrink-0" />
-                            <span>{ing}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-
-                    <div>
-                      <h4 className="text-[11px] font-mono uppercase text-slate-400 mb-2">Cooking Steps ({(comp.steps || []).length})</h4>
-                      <ol className="space-y-2">
-                        {[...(comp.steps || [])].sort((a, b) => (a.order || 0) - (b.order || 0)).map((st, sIdx) => (
-                          <li key={st.id || sIdx} className="p-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs space-y-1">
-                            <div className="flex items-center justify-between gap-2">
-                              <span className="font-bold text-slate-200">{sIdx + 1}. {st.title}</span>
-                              <div className="flex items-center gap-1.5 shrink-0">
-                                {st.ovenAssignment && st.ovenAssignment !== 'none' && (
-                                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-300">
-                                    {st.ovenAssignment === 'oven2' ? (ovenConfig?.oven2?.name || 'Oven 2') : (ovenConfig?.oven1?.name || 'Oven 1')}
-                                    {st.ovenTempC ? ` ${st.ovenTempC}°C` : ''}
-                                  </span>
-                                )}
-                                <span className="font-mono text-orange-400">{formatDurationHM(st.durationMinutes)}</span>
-                              </div>
-                            </div>
-                            {st.subSteps && st.subSteps.length > 0 && (
-                              <div className="pl-2.5 border-l border-orange-500/40 space-y-0.5 pt-1">
-                                {st.subSteps.map((sub, subIdx) => (
-                                  <div key={sub.id || subIdx} className="text-[11px] text-slate-400 flex items-center justify-between">
-                                    <span>{sIdx + 1}{String.fromCharCode(97 + subIdx)}: {sub.title}</span>
-                                    <span className="font-mono text-orange-300">{formatDurationHM(sub.durationMinutes)}</span>
-                                  </div>
-                                ))}
-                              </div>
-                            )}
-                            {st.endInstruction && (
-                              <div className="text-[11px] text-orange-300/90 pt-0.5">→ {st.endInstruction}</div>
-                            )}
-                          </li>
-                        ))}
-                      </ol>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
+                );
+              })
+            )}
           </div>
         </div>
       );
     }
 
     // ============================================================================
-    // SCREEN 3: MEAL PLANNER & SAVED MEALS VIEW
+    // SCREEN 3: MEAL PLANNER & SAVED MEALS VIEW (GROUPED BY CATEGORY)
     // ============================================================================
     function MealPlannerView({
       session,
       updateSession,
       library,
+      categories,
       presets,
       updatePresets,
       schedule,
@@ -3227,16 +3680,31 @@
     }) {
       const [presetName, setPresetName] = useState('');
       const [presetDesc, setPresetDesc] = useState('');
+      const [plannerCatFilter, setPlannerCatFilter] = useState('ALL');
+
+      const allCategories = useMemo(() => {
+        const set = new Set(categories || []);
+        library.forEach(item => {
+          if (item.category) set.add(item.category);
+        });
+        return Array.from(set);
+      }, [categories, library]);
+
+      const filteredPlannerDishes = useMemo(() => {
+        if (plannerCatFilter === 'ALL') return library;
+        return library.filter(c => (c.category || 'Uncategorized') === plannerCatFilter);
+      }, [library, plannerCatFilter]);
 
       const handleSaveCurrentAsPreset = (e) => {
         e.preventDefault();
+        const validIds = (session.selectedComponentIds || []).filter(id => library.some(c => c.id === id));
         const nameToUse = presetName.trim() || session.mealName || 'Custom Roast Preset';
         const newPreset = {
           id: 'preset-' + Date.now(),
           name: nameToUse,
-          description: presetDesc.trim() || `${(session.selectedComponentIds || []).length} dishes • Target ${session.targetServeTime}`,
+          description: presetDesc.trim() || `${validIds.length} dishes • Target ${session.targetServeTime}`,
           targetServeTime: session.targetServeTime || '14:30',
-          componentIds: [...(session.selectedComponentIds || [])]
+          componentIds: validIds
         };
         updatePresets(prev => [newPreset, ...prev]);
         setPresetName('');
@@ -3245,11 +3713,12 @@
       };
 
       const handleLoadPreset = (preset) => {
+        const validIds = (preset.componentIds || []).filter(id => library.some(c => c.id === id));
         updateSession(prev => ({
           ...prev,
           mealName: preset.name,
           targetServeTime: preset.targetServeTime || prev.targetServeTime,
-          selectedComponentIds: [...(preset.componentIds || [])],
+          selectedComponentIds: validIds,
           stepStates: {}
         }));
         showToast(`Loaded "${preset.name}"`);
@@ -3367,9 +3836,33 @@
           </div>
 
           <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 space-y-4 shadow-xl">
-            <h3 className="font-bold text-lg text-white">Select Dishes for Today's Roast</h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="font-bold text-lg text-white">Select Dishes for Today's Roast</h3>
+              <div className="flex items-center gap-1.5 overflow-x-auto">
+                <button
+                  onClick={() => setPlannerCatFilter('ALL')}
+                  className={`px-2.5 py-1 rounded-lg text-xs font-bold border ${
+                    plannerCatFilter === 'ALL' ? 'bg-orange-500 text-slate-950 border-orange-500' : 'bg-slate-950 border-slate-800 text-slate-400'
+                  }`}
+                >
+                  All
+                </button>
+                {allCategories.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setPlannerCatFilter(cat)}
+                    className={`px-2.5 py-1 rounded-lg text-xs font-semibold border ${
+                      plannerCatFilter === cat ? 'bg-orange-500 text-slate-950 border-orange-500 font-bold' : 'bg-slate-950 border-slate-800 text-slate-300'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              {library.map(comp => {
+              {filteredPlannerDishes.map(comp => {
                 const selected = (session.selectedComponentIds || []).includes(comp.id);
                 const totalMins = (comp.steps || []).reduce((acc, s) => acc + (Number(s.durationMinutes) || 0), 0);
                 return (
@@ -3382,7 +3875,7 @@
                     <button
                       onClick={() => {
                         const next = selected
-                          ? session.selectedComponentIds.filter(id => id !== comp.id)
+                          ? (session.selectedComponentIds || []).filter(id => id !== comp.id)
                           : [...(session.selectedComponentIds || []), comp.id];
                         updateSession(prev => ({ ...prev, selectedComponentIds: next }));
                       }}
@@ -3394,7 +3887,7 @@
                       <div className="truncate">
                         <div className="text-sm font-bold text-white truncate">{comp.name}</div>
                         <div className="text-[11px] font-mono text-slate-400">
-                          {formatDurationHM(totalMins)} • {(comp.steps || []).length} steps {comp.soloOvenSlot ? '• SOLO OVEN' : ''}
+                          {comp.category || 'Uncategorized'} • {formatDurationHM(totalMins)} • {(comp.steps || []).length} steps {comp.soloOvenSlot ? '• SOLO OVEN' : ''}
                         </div>
                       </div>
                     </button>
@@ -3491,7 +3984,7 @@
             <div className="space-y-5">
               <div className="flex items-center justify-between border-b border-slate-800 pb-4">
                 <div>
-                  <span className="text-xs font-mono uppercase text-orange-400">Quick Reference</span>
+                  <span className="text-xs font-mono uppercase text-orange-400">Quick Reference • {comp.category || 'Uncategorized'}</span>
                   <h3 className="text-xl font-bold text-white">{comp.name}</h3>
                 </div>
                 <button onClick={onClose} className="p-2 rounded-xl bg-slate-800 text-slate-300"><Icon name="x" className="w-5 h-5" /></button>
@@ -3542,7 +4035,10 @@
               </div>
               {activeComponents.map(c => (
                 <div key={c.id} className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-2">
-                  <h4 className="font-bold text-sm text-orange-300">{c.name}</h4>
+                  <div className="flex items-center justify-between">
+                    <h4 className="font-bold text-sm text-orange-300">{c.name}</h4>
+                    <span className="text-[10px] font-mono text-slate-400">{c.category || 'Uncategorized'}</span>
+                  </div>
                   <ul className="space-y-1">
                     {(c.ingredients || []).map((ing, idx) => (
                       <li key={idx} className="text-xs text-slate-300 flex items-center gap-2">
@@ -3563,10 +4059,13 @@
     }
 
     // ============================================================================
-    // COMPONENT EDITOR MODAL (WITH STICKY HEADER & AUTOMATIC SERVE STEP)
+    // COMPONENT EDITOR MODAL (WITH CATEGORY SELECTOR, STICKY HEADER & AUTO SERVE)
     // ============================================================================
-    function ComponentEditorModal({ component, onClose, onSave }) {
+    function ComponentEditorModal({ component, categories, onAddCategory, onClose, onSave }) {
       const [name, setName] = useState(component.name || '');
+      const [category, setCategory] = useState(component.category || (categories && categories[0]) || 'Meat');
+      const [isAddingCustomCat, setIsAddingCustomCat] = useState(false);
+      const [customCatName, setCustomCatName] = useState('');
       const [color, setColor] = useState(component.color || 'orange');
       const [soloOvenSlot, setSoloOvenSlot] = useState(Boolean(component.soloOvenSlot));
       const [defaultOven, setDefaultOven] = useState(component.defaultOven || 'oven1');
@@ -3578,6 +4077,21 @@
           : [{ id: 'step-' + Date.now(), title: '', durationMinutes: 20, order: 1, ovenAssignment: 'oven1', ovenTempC: 200, subSteps: [], endInstruction: '' }];
         return initial.sort((a, b) => (a.order || 0) - (b.order || 0));
       });
+
+      const availableCategories = useMemo(() => {
+        const set = new Set(categories || DEFAULT_CATEGORIES);
+        if (category) set.add(category);
+        return Array.from(set);
+      }, [categories, category]);
+
+      const handleCreateCustomCategory = () => {
+        const trimmed = customCatName.trim();
+        if (!trimmed) return;
+        if (onAddCategory) onAddCategory(trimmed);
+        setCategory(trimmed);
+        setCustomCatName('');
+        setIsAddingCustomCat(false);
+      };
 
       const handleAddStep = () => {
         setSteps(prev => [
@@ -3674,9 +4188,14 @@
           }))
         }));
 
+        const finalCategory = isAddingCustomCat && customCatName.trim()
+          ? customCatName.trim()
+          : (category || 'Meat');
+
         onSave({
           ...component,
           name: name.trim() || 'Untitled Dish',
+          category: finalCategory,
           color,
           soloOvenSlot,
           defaultOven,
@@ -3711,8 +4230,8 @@
 
             {/* Scrollable Content Body */}
             <div className="space-y-5 overflow-y-auto pr-1 flex-1">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div className="sm:col-span-2">
+              <div className="grid grid-cols-1 sm:grid-cols-12 gap-4">
+                <div className="sm:col-span-5">
                   <label className="block text-xs font-mono uppercase text-slate-400 mb-1">Dish Name</label>
                   <input
                     type="text"
@@ -3724,7 +4243,48 @@
                   />
                 </div>
 
-                <div>
+                <div className="sm:col-span-4">
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-mono uppercase text-slate-400">Category</label>
+                    <button
+                      type="button"
+                      onClick={() => setIsAddingCustomCat(!isAddingCustomCat)}
+                      className="text-[10px] font-mono text-orange-400 hover:underline"
+                    >
+                      {isAddingCustomCat ? 'Select Existing' : '+ New Category'}
+                    </button>
+                  </div>
+                  {isAddingCustomCat ? (
+                    <div className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={customCatName}
+                        onChange={e => setCustomCatName(e.target.value)}
+                        placeholder="e.g. Stuffing"
+                        className="flex-1 px-3 py-2 rounded-xl bg-slate-950 border border-orange-500 text-xs text-white"
+                      />
+                      <button
+                        type="button"
+                        onClick={handleCreateCustomCategory}
+                        className="px-2.5 py-2 rounded-xl bg-orange-500 text-slate-950 font-bold text-xs"
+                      >
+                        Add
+                      </button>
+                    </div>
+                  ) : (
+                    <select
+                      value={category}
+                      onChange={e => setCategory(e.target.value)}
+                      className="w-full px-3 py-2 rounded-xl bg-slate-950 border border-slate-700 text-xs text-orange-300 font-semibold"
+                    >
+                      {availableCategories.map(cat => (
+                        <option key={cat} value={cat}>{cat}</option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+
+                <div className="sm:col-span-3">
                   <label className="block text-xs font-mono uppercase text-slate-400 mb-1">Default Oven</label>
                   <select
                     value={defaultOven}
@@ -3733,7 +4293,7 @@
                   >
                     <option value="oven1">Oven 1 (Main)</option>
                     <option value="oven2">Oven 2 (Second)</option>
-                    <option value="none">Hob / Countertop (No Oven)</option>
+                    <option value="none">Hob / Countertop</option>
                   </select>
                 </div>
               </div>
