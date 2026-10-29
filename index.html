@@ -2,7 +2,7 @@
 <html lang="en" class="dark">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
   <meta name="theme-color" content="#090d16" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -94,11 +94,19 @@
   </script>
 
   <style>
+    :root { 
+      --app-header-h: 64px; 
+    }
+
     body {
       background-color: #090d16;
       color: #f8fafc;
       -webkit-tap-highlight-color: transparent;
+      /* Landscape notches & safe areas */
+      padding-left: env(safe-area-inset-left);
+      padding-right: env(safe-area-inset-right);
     }
+
     ::-webkit-scrollbar { width: 6px; height: 6px; }
     ::-webkit-scrollbar-track { background: #090d16; }
     ::-webkit-scrollbar-thumb { background: #1e293b; border-radius: 3px; }
@@ -145,15 +153,34 @@
       overflow: hidden;
     }
 
-    /* Subtle settle animation when Show Completed is active */
+    /* Subtle settle animation (text stays legible) */
     @keyframes settleCompleted {
-      0% { transform: scale(0.98); opacity: 0.9; }
-      100% { transform: scale(1); opacity: 0.45; }
+      0%   { transform: scale(0.98); opacity: 0.9; }
+      100% { transform: scale(1);    opacity: 1; }
     }
     .animate-completed-steady {
       animation: settleCompleted 0.25s ease-out forwards;
     }
+
+    /* Calm alarm entrance (replaces bounce animation) */
+    @keyframes alarmIn {
+      from { opacity: 0; transform: translateY(-8px); }
+      to   { opacity: 1; transform: none; }
+    }
+    @media (prefers-reduced-motion: no-preference) {
+      .alarm-in { animation: alarmIn 0.22s ease-out both; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
   </style>
+    
 </head>
 <body class="min-h-screen antialiased selection:bg-orange-500 selection:text-slate-950">
   <div id="root"></div>
@@ -162,9 +189,11 @@
     const { useState, useEffect, useMemo, useRef, useCallback } = React;
 
     // ============================================================================
-    // WEB AUDIO WHOOSH SYNTHESIZER
+    // WEB AUDIO WHOOSH SYNTHESIZER & AUTOPLAY UNLOCK
     // ============================================================================
     let sharedAudioCtx = null;
+    let audioUnlocked = false;
+
     function getAudioContext() {
       if (!sharedAudioCtx) {
         const AudioCtx = window.AudioContext || window.webkitAudioContext;
@@ -175,6 +204,41 @@
       }
       return sharedAudioCtx;
     }
+
+    function unlockAudio() {
+      try {
+        if ('audioSession' in navigator && navigator.audioSession) {
+          navigator.audioSession.type = 'playback';
+        }
+        const ctx = getAudioContext();
+        if (!ctx) return;
+
+        if (ctx.state === 'suspended') {
+          ctx.resume().catch(() => {});
+        }
+
+        if (!audioUnlocked) {
+          const buffer = ctx.createBuffer(1, 1, 22050);
+          const source = ctx.createBufferSource();
+          source.buffer = buffer;
+          source.connect(ctx.destination);
+          source.start(0);
+          audioUnlocked = true;
+        }
+      } catch (e) {
+        console.warn("Audio unlock error:", e);
+      }
+    }
+
+    ['pointerdown', 'touchend', 'keydown'].forEach(evt => {
+      window.addEventListener(evt, unlockAudio, { passive: true });
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && sharedAudioCtx && sharedAudioCtx.state === 'suspended') {
+        sharedAudioCtx.resume().catch(() => {});
+      }
+    });
 
     function playWhooshSound(enabled = true) {
       if (!enabled) return;
@@ -558,15 +622,94 @@
     // ============================================================================
     // SCHEDULING ENGINE (WITH AUTOMATIC SERVE / PLATING STEP & PREHEAT)
     // ============================================================================
+    const TIME_24H_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
+    const SERVE_RE = /\b(serve|serving|plate|plating)\b/i;
+
     function parseTimeToDate(timeStr) {
       const now = new Date();
-      const [hours, minutes] = (timeStr || '14:30').split(':').map(Number);
-      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours || 14, minutes || 30, 0, 0);
+      const raw = typeof timeStr === 'string' ? timeStr.trim() : '';
+      const match = TIME_24H_RE.exec(raw);
+      const hours = match ? parseInt(match[1], 10) : 14;
+      const minutes = match ? parseInt(match[2], 10) : 30;
+      return new Date(now.getFullYear(), now.getMonth(), now.getDate(), hours, minutes, 0, 0);
     }
 
     function formatTimeHHMM(dateObj) {
       if (!dateObj || isNaN(dateObj.getTime())) return '--:--';
       return dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', hour12: false });
+    }
+
+    function buildOrderedStepsForComponent(comp) {
+      const userSteps = [...(comp.steps || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
+      const hasServeStep = userSteps.some(s => SERVE_RE.test(s.title || ''));
+      return hasServeStep ? userSteps : [
+        ...userSteps,
+        {
+          id: `step-auto-serve-${comp.id}`,
+          title: `Plate & Serve ${comp.name}`,
+          durationMinutes: 2,
+          order: userSteps.length + 1,
+          ovenAssignment: 'none',
+          subSteps: [],
+          endInstruction: 'Enjoy your meal!'
+        }
+      ];
+    }
+
+    function ovenProfile(comp, session, ovenConfig) {
+      const orderedSteps = buildOrderedStepsForComponent(comp);
+      const stepDurations = orderedSteps.map(step => {
+        const stepState = (session?.stepStates && session.stepStates[step.id]) || {};
+        const durationExtras = Number(stepState.extraMinutes || 0);
+        return Math.max(1, (Number(step.durationMinutes) || 0) + durationExtras);
+      });
+
+      const stepOvens = orderedSteps.map(step => {
+        const stepState = (session?.stepStates && session.stepStates[step.id]) || {};
+        const rawOven = stepState.ovenOverride || step.ovenAssignment || comp.defaultOven || 'none';
+        return (rawOven === 'oven2' && !ovenConfig.oven2.enabled) ? 'oven1' : rawOven;
+      });
+
+      const totalMinutes = stepDurations.reduce((acc, d) => acc + d, 0);
+      let firstOvenIdx = -1;
+      let lastOvenIdx = -1;
+
+      stepOvens.forEach((ov, idx) => {
+        if (ov && ov !== 'none') {
+          if (firstOvenIdx === -1) firstOvenIdx = idx;
+          lastOvenIdx = idx;
+        }
+      });
+
+      if (firstOvenIdx === -1) {
+        return {
+          orderedSteps,
+          totalMinutes,
+          hasOvenSteps: false,
+          ovenSpanMinutes: 0,
+          preOvenMinutes: totalMinutes,
+          postOvenMinutes: 0
+        };
+      }
+
+      let preOvenMinutes = 0;
+      let ovenSpanMinutes = 0;
+      let postOvenMinutes = 0;
+
+      stepDurations.forEach((dur, idx) => {
+        if (idx < firstOvenIdx) preOvenMinutes += dur;
+        else if (idx <= lastOvenIdx) ovenSpanMinutes += dur;
+        else postOvenMinutes += dur;
+      });
+
+      return {
+        orderedSteps,
+        totalMinutes,
+        hasOvenSteps: true,
+        ovenSpanMinutes,
+        preOvenMinutes,
+        postOvenMinutes
+      };
     }
 
     function calculateSchedule(session, library) {
@@ -584,35 +727,30 @@
         .map(id => library.find(c => c.id === id))
         .filter(Boolean);
 
+      const profilesById = {};
+      activeComponents.forEach(comp => {
+        profilesById[comp.id] = ovenProfile(comp, session, ovenConfig);
+      });
+
       const soloComponents = activeComponents.filter(c => c.soloOvenSlot);
       const soloSlotMinutes = soloComponents.reduce((maxSolo, comp) => {
-        const compTotal = (comp.steps || []).reduce((sum, s) => sum + (Number(s.durationMinutes) || 0), 0);
-        return Math.max(maxSolo, compTotal);
+        const prof = profilesById[comp.id];
+        const slotWindow = prof.hasOvenSteps ? (prof.ovenSpanMinutes + prof.postOvenMinutes) : prof.totalMinutes;
+        return Math.max(maxSolo, slotWindow);
       }, 0);
 
       const timelineSteps = [];
       let earliestStartMs = targetDate.getTime();
 
       activeComponents.forEach(comp => {
-        const userSteps = [...(comp.steps || [])].sort((a, b) => (a.order || 0) - (b.order || 0));
-        
-        // Automatically append a final 'Serve & Plating' step (2 mins) to every component if not already present
-        const hasServeStep = userSteps.some(s => (s.title || '').toLowerCase().includes('serve') || (s.title || '').toLowerCase().includes('plating'));
-        const orderedSteps = hasServeStep ? userSteps : [
-          ...userSteps,
-          {
-            id: `step-auto-serve-${comp.id}`,
-            title: `Plate & Serve ${comp.name}`,
-            durationMinutes: 2,
-            order: userSteps.length + 1,
-            ovenAssignment: 'none',
-            subSteps: [],
-            endInstruction: 'Enjoy your meal!'
-          }
-        ];
+        const prof = profilesById[comp.id];
+        const orderedSteps = prof.orderedSteps;
+        const totalCompMinutes = prof.totalMinutes;
 
-        const totalCompMinutes = orderedSteps.reduce((acc, s) => acc + (Number(s.durationMinutes) || 0), 0);
-        const finishesEarlyByMinutes = (!comp.soloOvenSlot && soloSlotMinutes > 0) ? soloSlotMinutes : 0;
+        // Shift non-solo oven dishes early only by the overlap needed so their last oven step clears before the solo oven slot begins
+        const finishesEarlyByMinutes = (!comp.soloOvenSlot && prof.hasOvenSteps && soloSlotMinutes > 0)
+          ? Math.max(0, soloSlotMinutes - prof.postOvenMinutes)
+          : 0;
 
         const compBaseFinishMs = targetDate.getTime() - (finishesEarlyByMinutes * 60 * 1000);
         const compBaseStartMs = compBaseFinishMs - (totalCompMinutes * 60 * 1000);
@@ -770,6 +908,180 @@
     }
 
     // ============================================================================
+    // CLAUDE ERGONOMIC UI COMPONENTS & STICKY STACK
+    // ============================================================================
+    const STICKY_TOP = { top: 'calc(var(--app-header-h, 64px) + env(safe-area-inset-top, 0px))' };
+
+    function StickyStack({ children }) {
+      return (
+        <div className="sticky z-30 bg-[#090d16]/95 pb-2 backdrop-blur-md" style={STICKY_TOP}>
+          <div className="mx-auto max-w-3xl space-y-2 px-3 pt-2">{children}</div>
+        </div>
+      );
+    }
+
+    const pickNowStep = (steps) => (steps || []).find(s => !s.completed) || null;
+
+    function fmtClock(totalSec) {
+      const s = Math.max(0, Math.floor(totalSec));
+      const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
+      const pad = n => String(n).padStart(2, '0');
+      return h > 0 ? `${h}:${pad(m)}:${pad(r)}` : `${pad(m)}:${pad(r)}`;
+    }
+
+    function useTapGuard(ms = 500) {
+      const last = useRef(0);
+      return useCallback((fn) => () => {
+        const t = Date.now();
+        if (t - last.current < ms) return;
+        last.current = t;
+        fn();
+      }, [ms]);
+    }
+
+    const NOW_TONE = {
+      upcoming: { border: 'border-orange-500', label: 'Starts in', clock: 'text-slate-50' },
+      active:   { border: 'border-orange-500', label: 'Time left', clock: 'text-orange-400' },
+      overdue:  { border: 'border-rose-500',   label: 'Overdue',   clock: 'text-rose-400' },
+    };
+
+    const FOCUS_RING = 'focus-visible:outline focus-visible:outline-4 focus-visible:outline-offset-2 focus-visible:outline-white';
+
+    function NowBar({ nowMs, onDone, onLate, step }) {
+      const guard = useTapGuard(500);
+
+      if (!step) {
+        return (
+          <section aria-label="Current step" className="rounded-3xl border-2 border-emerald-500 bg-slate-900 p-4 text-center">
+            <p className="text-2xl font-extrabold text-white">All steps done</p>
+            <p className="text-sm text-slate-300">Plate up and enjoy your meal!</p>
+          </section>
+        );
+      }
+
+      const startMs = step.startTime.getTime();
+      const endMs = step.endTime.getTime();
+      const state = nowMs < startMs ? 'upcoming' : nowMs <= endMs ? 'active' : 'overdue';
+      const secs =
+        state === 'upcoming' ? (startMs - nowMs) / 1000 :
+        state === 'active'   ? (endMs - nowMs) / 1000 :
+                               (nowMs - endMs) / 1000;
+      const tone = NOW_TONE[state];
+      const usesOven = step.ovenAssignment && step.ovenAssignment !== 'none';
+      const ovenText = usesOven
+        ? `${step.ovenAssignment === 'oven2' ? 'Oven 2' : 'Oven 1'} at ${step.ovenTempC}°C`
+        : null;
+
+      return (
+        <section aria-label="Current step" className={`rounded-3xl border-2 bg-slate-900 p-4 shadow-xl shadow-black/60 ${tone.border}`}>
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0">
+              <p className="truncate text-base font-semibold text-slate-300">{step.componentName}</p>
+              <p className="font-mono text-sm text-slate-300">
+                {formatTimeHHMM(step.startTime)} to {formatTimeHHMM(step.endTime)}
+              </p>
+              {ovenText && (
+                <span className="mt-1 inline-block rounded-lg border border-orange-500/50 bg-orange-500/15 px-2 py-0.5 text-xs font-semibold text-orange-200">
+                  {ovenText}
+                </span>
+              )}
+            </div>
+            <div className="shrink-0 text-right">
+              <p className="text-xs font-semibold text-slate-300">{tone.label}</p>
+              <p className={`font-mono text-3xl font-extrabold leading-none tabular-nums sm:text-4xl ${tone.clock}`}>
+                {state === 'overdue' ? '+' : ''}{fmtClock(secs)}
+              </p>
+            </div>
+          </div>
+
+          <h2 className="mt-2 line-clamp-3 break-words text-2xl font-extrabold leading-tight text-white">
+            {step.title}
+          </h2>
+
+          {step.endInstruction && state !== 'upcoming' && (
+            <p className="mt-1.5 line-clamp-2 text-sm text-slate-200">
+              <span className="font-bold text-orange-400">Then: </span>{step.endInstruction}
+            </p>
+          )}
+
+          <div className="mt-3 flex gap-2">
+            <button
+              type="button"
+              onClick={guard(() => onDone(step))}
+              aria-label={`Mark "${step.title}" done`}
+              className={`min-h-[56px] flex-1 touch-manipulation rounded-2xl bg-orange-500 px-4 text-xl font-extrabold text-slate-950 active:bg-orange-300 ${FOCUS_RING}`}
+            >
+              ✓ Done
+            </button>
+            {state !== 'upcoming' && [5, 10].map(min => (
+              <button
+                key={min}
+                type="button"
+                onClick={guard(() => onLate(step, min))}
+                aria-label={`Add ${min} minutes to "${step.title}"`}
+                className={`min-h-[56px] min-w-[64px] touch-manipulation rounded-2xl border-2 border-slate-500 bg-slate-800 px-3 text-lg font-bold text-orange-300 active:bg-slate-700 ${FOCUS_RING}`}
+              >
+                +{min}m
+              </button>
+            ))}
+          </div>
+        </section>
+      );
+    }
+
+    function CheckButton({ checked, onToggle, label }) {
+      return (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-pressed={checked}
+          aria-label={label}
+          className="-ml-1.5 -mt-1.5 flex h-14 w-14 shrink-0 touch-manipulation items-center justify-center rounded-full active:bg-slate-800/70 focus-visible:outline focus-visible:outline-4 focus-visible:outline-white"
+        >
+          <span
+            className={`flex h-8 w-8 items-center justify-center rounded-full border-[3px] transition ${
+              checked ? 'border-orange-500 bg-orange-500 text-slate-950' : 'border-slate-400'
+            }`}
+          >
+            {checked && <Icon name="check" className="h-4 w-4 stroke-[3]" />}
+          </span>
+        </button>
+      );
+    }
+
+    function AlarmBanner({ alarm, onReplay, onDismiss }) {
+      if (!alarm) return null;
+      const { step, leadSeconds } = alarm;
+      const when = leadSeconds === 0 ? 'Starting now' : `Starts in ${formatLeadTimeShort(leadSeconds).replace(' before', '')}`;
+
+      return (
+        <div role="alert" className="alarm-in flex items-center gap-3 rounded-2xl border border-l-8 border-orange-500/60 border-l-orange-500 bg-slate-900 p-3 shadow-2xl shadow-black/60">
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-orange-300">{when}, due {formatTimeHHMM(step.startTime)}</p>
+            <p className="line-clamp-2 break-words text-sm font-bold leading-snug text-white">
+              {step.componentName}: {step.title}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onReplay}
+            aria-label="Replay alarm sound"
+            className="flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center rounded-xl bg-slate-800 text-orange-300 active:bg-slate-700"
+          >
+            <Icon name="volume-2" className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            onClick={onDismiss}
+            className="min-h-[44px] touch-manipulation rounded-xl bg-orange-500 px-4 text-sm font-extrabold text-slate-950 active:bg-orange-300"
+          >
+            Got it
+          </button>
+        </div>
+      );
+    }
+
+    // ============================================================================
     // MAIN APP COMPONENT
     // ============================================================================
     function App() {
@@ -904,6 +1216,25 @@
 
       const serveTimeInputRef = useRef(null);
       const fileImportInputRef = useRef(null);
+      const appHeaderRef = useRef(null);
+
+      // Dynamically measure header height for exact sticky stack positioning
+      useEffect(() => {
+        const el = appHeaderRef.current;
+        if (!el) return;
+        const updateHeight = () => {
+          document.documentElement.style.setProperty('--app-header-h', `${el.offsetHeight}px`);
+        };
+        updateHeight();
+        if (typeof ResizeObserver !== 'undefined') {
+          const ro = new ResizeObserver(updateHeight);
+          ro.observe(el);
+          return () => ro.disconnect();
+        } else {
+          window.addEventListener('resize', updateHeight);
+          return () => window.removeEventListener('resize', updateHeight);
+        }
+      }, []);
 
       const openDrawerAndFocusServeTime = () => {
         setShowBurgerDrawer(true);
@@ -926,11 +1257,11 @@
       }, []);
 
       const isApplyingRemoteRef = useRef(false);
-      const lastLocalMutationMsRef = useRef(() => {
+      const lastLocalMutationMsRef = useRef((() => {
         try {
           return Number(localStorage.getItem('roasttimer_updated_at')) || 0;
         } catch { return 0; }
-      });
+      })());
 
       const stateRef = useRef({ session, library, presets, categories, kitchenPin });
       useEffect(() => {
@@ -1293,20 +1624,50 @@
 
       useEffect(() => {
         let wakeLock = null;
+        let cancelled = false;
+
         async function requestWakeLock() {
-          if (keepScreenAwake && 'wakeLock' in navigator) {
-            try {
-              wakeLock = await navigator.wakeLock.request('screen');
-              setWakeLockActive(true);
-              wakeLock.addEventListener('release', () => setWakeLockActive(false));
-            } catch {
-              setWakeLockActive(false);
+          if (cancelled || !keepScreenAwake || !('wakeLock' in navigator)) {
+            if (!keepScreenAwake) setWakeLockActive(false);
+            return;
+          }
+          if (document.visibilityState !== 'visible') return;
+          try {
+            if (wakeLock) {
+              try { await wakeLock.release(); } catch {}
+              wakeLock = null;
             }
+            const lock = await navigator.wakeLock.request('screen');
+            if (cancelled) {
+              lock.release().catch(() => {});
+              return;
+            }
+            wakeLock = lock;
+            setWakeLockActive(true);
+            wakeLock.addEventListener('release', () => {
+              if (!cancelled) setWakeLockActive(false);
+            });
+          } catch {
+            if (!cancelled) setWakeLockActive(false);
           }
         }
+
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'visible' && keepScreenAwake) {
+            requestWakeLock();
+          }
+        };
+
         requestWakeLock();
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+
         return () => {
-          if (wakeLock) wakeLock.release().catch(() => {});
+          cancelled = true;
+          document.removeEventListener('visibilitychange', handleVisibilityChange);
+          if (wakeLock) {
+            wakeLock.release().catch(() => {});
+            wakeLock = null;
+          }
         };
       }, [keepScreenAwake]);
 
@@ -1452,8 +1813,8 @@
       }, [library, burgerDishSearch]);
 
       return (
-        <div className="min-h-screen flex flex-col bg-[#090d16] text-slate-100 pb-20 md:pb-10">
-          <header className="sticky top-0 z-30 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/60">
+        <div className="min-h-screen flex flex-col bg-[#090d16] text-slate-100 pb-[calc(5rem+env(safe-area-inset-bottom))] md:pb-10">
+          <header ref={appHeaderRef} className="sticky top-0 z-30 bg-[#090d16]/90 backdrop-blur-md border-b border-slate-800/60 pt-[env(safe-area-inset-top)]">
             <div className="max-w-4xl mx-auto px-4 py-3 flex items-center justify-between gap-3">
               <div className="flex items-center gap-3 min-w-0">
                 <button
@@ -1520,6 +1881,24 @@
               </div>
             </div>
           </header>
+
+          {(activeAlarmBanner || (activeTab === 'live' && schedule.allSteps.length > 0)) && (
+            <StickyStack>
+              <AlarmBanner
+                alarm={activeAlarmBanner}
+                onReplay={() => playKitchenAlarmChime(true)}
+                onDismiss={() => setActiveAlarmBanner(null)}
+              />
+              {activeTab === 'live' && schedule.allSteps.length > 0 && (
+                <NowBar
+                  nowMs={now.getTime()}
+                  step={pickNowStep(schedule.allSteps)}
+                  onDone={handleToggleStepComplete}
+                  onLate={handleAdjustStepDuration}
+                />
+              )}
+            </StickyStack>
+          )}
 
           {toastMessage && (
             <div className="fixed bottom-20 md:bottom-6 right-4 z-50 bg-slate-900 border border-orange-500/40 text-orange-200 px-4 py-2.5 rounded-xl shadow-2xl flex items-center gap-2 text-xs font-semibold">
@@ -2167,7 +2546,7 @@
             </div>
           </div>
 
-          <nav className="fixed bottom-0 inset-x-0 z-40 bg-[#090d16]/95 backdrop-blur-md border-t border-slate-800 flex md:hidden">
+          <nav className="fixed bottom-0 inset-x-0 z-40 bg-[#090d16]/95 backdrop-blur-md border-t border-slate-800 flex md:hidden pb-[env(safe-area-inset-bottom)]">
             <button
               onClick={() => setActiveTab('live')}
               className={`flex-1 py-3 flex flex-col items-center justify-center gap-1 text-xs font-bold transition ${
@@ -2284,34 +2663,6 @@
               onOpenQuickDrawer={(compId) => setQuickDrawerCompId(compId)}
               onOpenCascadeModal={(st) => setCascadePromptStep(st)}
             />
-          )}
-
-          {activeAlarmBanner && (
-            <div className="fixed top-16 inset-x-0 z-50 flex justify-center px-4 pointer-events-none">
-              <div className="pointer-events-auto bg-slate-900 border-2 border-orange-500 text-white px-4 py-3 rounded-2xl shadow-2xl flex items-center gap-3 max-w-md w-full animate-bounce">
-                <div className="w-9 h-9 rounded-xl bg-orange-500 text-slate-950 flex items-center justify-center shrink-0">
-                  <Icon name="alarm-clock" className="w-5 h-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-[10px] font-mono uppercase text-orange-400 font-bold">
-                    Alarm • {activeAlarmBanner.leadSeconds === 0 ? 'Starting Now' : `Starts in ${formatLeadTimeShort(activeAlarmBanner.leadSeconds).replace(' before', '')}`} ({formatTimeHHMM(activeAlarmBanner.step.startTime)})
-                  </div>
-                  <div className="text-xs font-bold truncate">{activeAlarmBanner.step.componentName}: {activeAlarmBanner.step.title}</div>
-                </div>
-                <button
-                  onClick={() => playKitchenAlarmChime(true)}
-                  className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] font-semibold text-orange-300"
-                >
-                  Replay
-                </button>
-                <button
-                  onClick={() => setActiveAlarmBanner(null)}
-                  className="px-3 py-1.5 rounded-lg bg-orange-500 text-slate-950 text-xs font-extrabold"
-                >
-                  Dismiss
-                </button>
-              </div>
-            </div>
           )}
 
           {activeNotificationAlert && (
@@ -2738,16 +3089,12 @@
                       }`}
                     >
                       <div className="flex items-center justify-between gap-2 pb-3 mb-3 border-b border-slate-800/80">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <button
-                            onClick={() => triggerMergedGroupToggle(groupSteps)}
-                            className={`w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition ${
-                              allGroupCompleted ? 'bg-orange-500 border-orange-500 text-slate-950' : 'border-orange-500/60 hover:border-orange-400'
-                            }`}
-                            title="Tick all simultaneous tasks in this group"
-                          >
-                            {allGroupCompleted && <Icon name="check" className="w-3.5 h-3.5 stroke-[3]" />}
-                          </button>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <CheckButton
+                            checked={allGroupCompleted}
+                            onToggle={() => triggerMergedGroupToggle(groupSteps)}
+                            label={`Mark all ${groupSteps.length} simultaneous steps done`}
+                          />
                           <span className="font-mono text-xs font-bold text-orange-400">
                             {formatTimeHHMM(entry.startTime)}
                           </span>
@@ -2783,15 +3130,12 @@
                                   : 'bg-slate-950/70 border-slate-800/80'
                               }`}
                             >
-                              <div className="flex items-start gap-3">
-                                <button
-                                  onClick={() => triggerStepToggle(step)}
-                                  className={`mt-0.5 w-5 h-5 rounded-full border-2 flex items-center justify-center shrink-0 transition ${
-                                    stepDone ? 'bg-orange-500 border-orange-500 text-slate-950' : 'border-slate-600 hover:border-orange-400'
-                                  }`}
-                                >
-                                  {stepDone && <Icon name="check" className="w-3 h-3 stroke-[3]" />}
-                                </button>
+                              <div className="flex items-start gap-1">
+                                <CheckButton
+                                  checked={stepDone}
+                                  onToggle={() => triggerStepToggle(step)}
+                                  label={`Mark "${step.componentName}: ${step.title}" done`}
+                                />
 
                                 <div className="flex-1 min-w-0 space-y-1.5">
                                   <div className="flex items-center justify-between gap-2">
@@ -2819,18 +3163,24 @@
                                       )}
                                     </div>
 
-                                    <div className="flex items-center gap-1 shrink-0">
+                                    <div className="-my-1.5 flex shrink-0 items-center gap-1">
                                       <button
+                                        type="button"
                                         onClick={() => onIsolateStep(step)}
-                                        className="px-2 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-orange-300 text-[11px] font-medium flex items-center gap-1"
+                                        aria-label={`Focus on "${step.title}"`}
+                                        className="flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-2.5 text-[11px] font-semibold text-slate-200 hover:bg-slate-800 hover:text-orange-300 active:bg-slate-700"
                                         title="Isolate this step"
                                       >
-                                        <Icon name="maximize-2" className="w-3 h-3 text-orange-400" />
+                                        <Icon name="maximize-2" className="w-3.5 h-3.5 text-orange-400" />
                                         <span className="hidden sm:inline">Isolate</span>
                                       </button>
                                       <button
+                                        type="button"
                                         onClick={() => setOpenStepMenuId(isMenuOpen ? null : step.stepId)}
-                                        className={`p-1 rounded-lg transition ${isMenuOpen ? 'bg-orange-500/20 text-orange-300' : 'text-slate-400 hover:bg-slate-900 hover:text-white'}`}
+                                        aria-label="Step options"
+                                        className={`flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center rounded-xl transition ${
+                                          isMenuOpen ? 'bg-orange-500/20 text-orange-300' : 'bg-slate-900 text-slate-300 hover:bg-slate-800 hover:text-white'
+                                        }`}
                                       >
                                         <Icon name="more-horizontal" className="w-4 h-4" />
                                       </button>
@@ -2840,6 +3190,36 @@
                                   <div className={`text-sm font-semibold break-words ${stepDone ? 'line-through text-slate-500' : 'text-slate-100'}`}>
                                     {step.title}
                                   </div>
+
+                                  {step.subSteps && step.subSteps.length > 0 && (
+                                    <div className="w-full pt-1 space-y-1.5">
+                                      {step.subSteps.map((sub, sIdx) => (
+                                        <button
+                                          key={sub.id || sIdx}
+                                          type="button"
+                                          onClick={() => onToggleSubStep(step.stepId, sub.id)}
+                                          className={`w-full text-left flex items-start gap-2.5 p-2.5 min-h-[44px] touch-manipulation rounded-xl border transition ${
+                                            sub.completed
+                                              ? 'bg-slate-950/30 border-slate-800/40 opacity-50'
+                                              : 'bg-slate-900/70 border-slate-800/80 hover:border-slate-700'
+                                          }`}
+                                        >
+                                          <span className={`mt-0.5 w-5 h-5 rounded flex items-center justify-center border shrink-0 ${sub.completed ? 'bg-orange-500 border-orange-500 text-slate-950' : 'border-slate-500'}`}>
+                                            {sub.completed && <Icon name="check" className="w-3.5 h-3.5 stroke-[3]" />}
+                                          </span>
+                                          <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+                                            <span className={`text-xs break-words ${sub.completed ? 'line-through text-slate-500' : 'text-slate-200'}`}>
+                                              <strong className="text-orange-400 font-mono mr-1.5">{step.stepOrder}{String.fromCharCode(97 + sIdx)}:</strong>
+                                              {sub.title}
+                                            </span>
+                                            <span className="font-mono text-[11px] text-slate-400 shrink-0">
+                                              {formatTimeHHMM(sub.startTime)} ({formatDurationHM(sub.durationMinutes)})
+                                            </span>
+                                          </div>
+                                        </button>
+                                      ))}
+                                    </div>
+                                  )}
 
                                   {step.endInstruction && !isMinimal && (
                                     <div className="w-full text-xs text-slate-300 bg-slate-900/80 border border-slate-800 px-2.5 py-1.5 rounded-lg break-words">
@@ -2899,15 +3279,12 @@
                         : 'bg-slate-900/80 border-slate-800/80 hover:border-slate-700'
                     }`}
                   >
-                    <div className="flex items-start gap-3.5 w-full">
-                      <button
-                        onClick={() => triggerStepToggle(step)}
-                        className={`mt-0.5 w-6 h-6 rounded-full border-2 flex items-center justify-center shrink-0 transition-transform duration-200 ${
-                          effectivelyCompleted ? 'bg-orange-500 border-orange-500 text-slate-950 scale-105' : 'border-slate-600 hover:border-orange-400'
-                        }`}
-                      >
-                        {effectivelyCompleted && <Icon name="check" className="w-3.5 h-3.5 stroke-[3]" />}
-                      </button>
+                    <div className="flex items-start gap-1 w-full">
+                      <CheckButton
+                        checked={effectivelyCompleted}
+                        onToggle={() => triggerStepToggle(step)}
+                        label={`Mark "${step.title}" done`}
+                      />
 
                       <div className="flex-1 min-w-0 space-y-2">
                         <div className="flex items-center justify-between gap-2">
@@ -2945,21 +3322,25 @@
                             )}
                           </div>
 
-                          <div className="flex items-center gap-1 shrink-0">
+                          <div className="-my-1.5 flex shrink-0 items-center gap-1">
                             <button
+                              type="button"
                               onClick={() => onIsolateStep(step)}
-                              className="px-2.5 py-1 rounded-lg bg-slate-800/80 hover:bg-slate-800 text-slate-300 hover:text-orange-300 text-xs font-medium flex items-center gap-1 transition"
-                              title="Isolate & focus on this step"
+                              aria-label={`Focus on "${step.title}"`}
+                              className="flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center gap-1.5 rounded-xl bg-slate-800 px-3 text-xs font-semibold text-slate-100 active:bg-slate-700"
                             >
-                              <Icon name="maximize-2" className="w-3.5 h-3.5 text-orange-400" />
+                              <Icon name="maximize-2" className="h-4 w-4 text-orange-400" />
                               <span className="hidden sm:inline">Isolate</span>
                             </button>
                             <button
+                              type="button"
                               onClick={() => setOpenStepMenuId(isMenuOpen ? null : step.stepId)}
-                              className={`p-1.5 rounded-lg transition ${isMenuOpen ? 'bg-orange-500/20 text-orange-300' : 'text-slate-400 hover:bg-slate-800 hover:text-white'}`}
-                              title="Step adjustments, oven switch, notes & alerts"
+                              aria-label="Step options"
+                              className={`flex min-h-[44px] min-w-[44px] touch-manipulation items-center justify-center rounded-xl ${
+                                isMenuOpen ? 'bg-orange-500/20 text-orange-200' : 'bg-slate-800 text-slate-200'
+                              }`}
                             >
-                              <Icon name="more-horizontal" className="w-4 h-4" />
+                              <Icon name="more-horizontal" className="h-5 w-5" />
                             </button>
                           </div>
                         </div>
@@ -2973,15 +3354,16 @@
                             {step.subSteps.map((sub, sIdx) => (
                               <button
                                 key={sub.id || sIdx}
+                                type="button"
                                 onClick={() => onToggleSubStep(step.stepId, sub.id)}
-                                className={`w-full text-left flex items-start gap-2.5 p-2.5 rounded-xl border transition ${
+                                className={`w-full text-left flex items-start gap-2.5 p-2.5 min-h-[44px] touch-manipulation rounded-xl border transition ${
                                   sub.completed
                                     ? 'bg-slate-950/30 border-slate-800/40 opacity-50'
                                     : 'bg-slate-950/60 border-slate-800/80 hover:border-slate-700'
                                 }`}
                               >
-                                <span className={`mt-0.5 w-4 h-4 rounded flex items-center justify-center border shrink-0 ${sub.completed ? 'bg-orange-500 border-orange-500 text-slate-950' : 'border-slate-600'}`}>
-                                  {sub.completed && <Icon name="check" className="w-3 h-3 stroke-[3]" />}
+                                <span className={`mt-0.5 w-5 h-5 rounded flex items-center justify-center border shrink-0 ${sub.completed ? 'bg-orange-500 border-orange-500 text-slate-950' : 'border-slate-500'}`}>
+                                  {sub.completed && <Icon name="check" className="w-3.5 h-3.5 stroke-[3]" />}
                                 </span>
                                 <div className="flex-1 min-w-0 flex flex-col sm:flex-row sm:items-center justify-between gap-1">
                                   <span className={`text-xs break-words ${sub.completed ? 'line-through text-slate-500' : 'text-slate-200'}`}>
@@ -3374,7 +3756,7 @@
       return (
         <div className="space-y-5">
           {/* Sticky Top Action Bar */}
-          <div className="sticky top-[61px] z-20 bg-[#090d16]/95 backdrop-blur-md py-2.5 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-3">
+          <div className="sticky z-20 bg-[#090d16]/95 backdrop-blur-md py-2.5 border-b border-slate-800/80 flex flex-wrap items-center justify-between gap-3" style={STICKY_TOP}>
             <div>
               <span className="text-[11px] font-mono uppercase text-orange-400">Screen 2 • Reusable Components</span>
               <h2 className="text-xl font-extrabold text-white">Items Library ({library.length})</h2>
